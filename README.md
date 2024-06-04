@@ -38,7 +38,7 @@ Here is one example to run this code:
 ```
 python experiments.py --model=simple-cnn \
     --dataset=cifar10 \
-    --alg=fedprox \
+    --alg=pFedSV \
     --lr=0.01 \
     --batch-size=64 \
     --epochs=10 \
