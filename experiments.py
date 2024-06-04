@@ -24,7 +24,7 @@ from sharplyValue import getSharplyValue
 import random
 
 import datetime
-# from torch.utils.tensorboard import SummaryWriter
+
 
 from model import *
 from utils import *
@@ -34,12 +34,14 @@ from torch.nn.functional import kl_div
 from collections import Counter
 import cvxpy as cp
 from hyper_model.benefit import Training_all
-import seaborn as sns
-import matplotlib.pyplot as plt
 
 
-# import seaborn as sns
-# import matplotlib.pyplot as plt
+
+'''
+We acknowledge the use of the NIID-Bench code framework in our design and express our gratitude for it.
+
+Code from: https://github.com/Xtra-Computing/NIID-Bench
+'''
 
 
 class UnbufferedFileHandler(logging.FileHandler):
@@ -58,8 +60,8 @@ def get_args():
     parser.add_argument('--lr', type=float, default=0.01, help='learning rate (default: 0.01)')
     parser.add_argument('--epochs', type=int, default=5, help='number of local epochs')
     parser.add_argument('--n_parties', type=int, default=2, help='number of workers in a distributed cluster')
-    parser.add_argument('--alg', type=str, default='fedavg',
-                        help='fl algorithms: fedavg/fedprox/scaffold/fednova/moon')
+    parser.add_argument('--alg', type=str, default='pFedSV',
+                        help='fl algorithms: pFedSV/pFedJS/pFedgraph/FedCollab/RACE/CE')
     parser.add_argument('--use_projection_head', type=bool, default=False,
                         help='whether add an additional header to model or not (see MOON)')
     parser.add_argument('--out_dim', type=int, default=256, help='the output dimension for the projection layer')
@@ -79,13 +81,12 @@ def get_args():
     parser.add_argument('--device', type=str, default='cuda:0', help='The device to run the program')
     parser.add_argument('--log_file_name', type=str, default=None, help='The log file name')
     parser.add_argument('--optimizer', type=str, default='sgd', help='the optimizer')
-    parser.add_argument('--mu', type=float, default=0.001, help='the mu parameter for fedprox')
     parser.add_argument('--noise', type=float, default=0, help='how much noise we add to some party')
     parser.add_argument('--noise_type', type=str, default='level',
                         help='Different level of noise or different space of noise')
     parser.add_argument('--rho', type=float, default=0, help='Parameter controlling the momentum SGD')
     parser.add_argument('--sample', type=float, default=1, help='Sample ratio for each communication round')
-    parser.add_argument('--k', type=int, default=2, help='pFedSV k')
+    parser.add_argument('--k', type=int, default=2, help='Choose a few more clients besides yourself in pFedSV')
     parser.add_argument('--lamda', type=float, default=0.5, help='pFedJS lambda')
     parser.add_argument('--round_calculate', type=int, default=5, help='every round calculate acc')
 
@@ -105,7 +106,7 @@ def get_args():
 
     args = parser.parse_args()
 
-    # pFedCollab in/out-dimension of model
+    # FedCollab in/out-dimension of model
     shapes_in = {
         'mnist': (1, 28, 28),
         'fmnist': (1, 28, 28),
@@ -234,14 +235,6 @@ def train_net(net_id, net, data_distribution, train_dataloader, val_dataloader, 
     logger.info('Training network %s' % str(net_id))
     net = net.to(device)
     net.to(device)
-    # train_acc = compute_accuracy(net, train_dataloader, device=device)
-    # val_acc, conf_matrix = compute_accuracy(net, val_dataloader, get_confusion_matrix=True, device=device)
-    # personalized_test_acc, generalized_test_acc = compute_local_test_accuracy(net, test_dl, data_distribution,
-    #                                                                           device=device)
-
-    # logger.info('>> Pre-Training Training accuracy: {}'.format(train_acc))
-    # logger.info('>> Pre-Training val accuracy: {}'.format(val_acc))
-    # logger.info('>> Pre-Training personalized_test accuracy: {}'.format(personalized_test_acc))
 
     if args_optimizer == 'adam':
         optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr, weight_decay=args.reg)
@@ -253,16 +246,13 @@ def train_net(net_id, net, data_distribution, train_dataloader, val_dataloader, 
                               weight_decay=args.reg)
     criterion = nn.CrossEntropyLoss().to(device)
 
-    cnt = 0
     if type(train_dataloader) == type([1]):
         pass
     else:
         train_dataloader = [train_dataloader]
 
-    # writer = SummaryWriter()
-
     for epoch in range(epochs):
-        epoch_loss_collector = []
+
         for tmp in train_dataloader:
             for batch_idx, (x, target) in enumerate(tmp):
                 x, target = x.to(device), target.to(device)
@@ -274,410 +264,30 @@ def train_net(net_id, net, data_distribution, train_dataloader, val_dataloader, 
                 net.to(device)
                 out = net(x)
                 loss = criterion(out, target)
-
                 loss.backward()
                 optimizer.step()
-
-                cnt += 1
-                epoch_loss_collector.append(loss.item())
-
-        epoch_loss = sum(epoch_loss_collector) / len(epoch_loss_collector)
-        # logger.info('Epoch: %d Loss: %f' % (epoch, epoch_loss))
-
-        # train_acc = compute_accuracy(net, train_dataloader, device=device)
-        # test_acc, conf_matrix = compute_accuracy(net, test_dataloader, get_confusion_matrix=True, device=device)
-
-        # writer.add_scalar('Accuracy/train', train_acc, epoch)
-        # writer.add_scalar('Accuracy/test', test_acc, epoch)
-
-        # if epoch % 10 == 0:
-        #     logger.info('Epoch: %d Loss: %f' % (epoch, epoch_loss))
-        #     train_acc = compute_accuracy(net, train_dataloader, device=device)
-        #     test_acc, conf_matrix = compute_accuracy(net, test_dataloader, get_confusion_matrix=True, device=device)
-        #
-        #     logger.info('>> Training accuracy: %f' % train_acc)
-        #     logger.info('>> Test accuracy: %f' % test_acc)
-
-    # train_acc = compute_accuracy(net, train_dataloader, device=device)
-    # val_acc, conf_matrix = compute_accuracy(net, val_dataloader, get_confusion_matrix=True, device=device)
-    # personalized_test_acc, generalized_test_acc = compute_local_test_accuracy(net, test_dl, data_distribution,
-    #                                                                           device=device)
-
-    # logger.info('>> clint %s, Training accuracy: %f' % (net_id, train_acc))
-    # logger.info('>> clint %s, Test accuracy: %f' % (net_id, val_acc))
-    # logger.info('>> clint %s, personalized_test accuracy: %f test_acc: %f' % (net_id, personalized_test_acc,generalized_test_acc))
-    # print('>> clint {}, Training accuracy: {}'.format(net_id, train_acc))
-    # print('>> clint {}, Val accuracy: {}'.format(net_id, val_acc))
-    # print('>> clint {}, personalized_test accuracy: {} test_acc: {}'.format(net_id, personalized_test_acc, generalized_test_acc))
-    print('>> clint {}'.format(net_id))
 
     net.to('cpu')
     logger.info(' ** clint %s Training complete **' % net_id)
-
     return
 
 
-def train_net_fedprox(net_id, net, global_net, train_dataloader, test_dataloader, epochs, lr, args_optimizer, mu,
-                      device="cpu"):
-    logger.info('Training network %s' % str(net_id))
-    logger.info('n_training: %d' % len(train_dataloader))
-    logger.info('n_test: %d' % len(test_dataloader))
-
-    train_acc = compute_accuracy(net, train_dataloader, device=device)
-    test_acc, conf_matrix = compute_accuracy(net, test_dataloader, get_confusion_matrix=True, device=device)
-
-    logger.info('>> Pre-Training Training accuracy: {}'.format(train_acc))
-    logger.info('>> Pre-Training Test accuracy: {}'.format(test_acc))
-
-    if args_optimizer == 'adam':
-        optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr, weight_decay=args.reg)
-    elif args_optimizer == 'amsgrad':
-        optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr, weight_decay=args.reg,
-                               amsgrad=True)
-    elif args_optimizer == 'sgd':
-        optimizer = optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=lr, momentum=args.rho,
-                              weight_decay=args.reg)
-
-    criterion = nn.CrossEntropyLoss().to(device)
-
-    cnt = 0
-    # mu = 0.001
-    global_weight_collector = list(global_net.to(device).parameters())
-
-    for epoch in range(epochs):
-        epoch_loss_collector = []
-        for batch_idx, (x, target) in enumerate(train_dataloader):
-            x, target = x.to(device), target.to(device)
-
-            optimizer.zero_grad()
-            x.requires_grad = True
-            target.requires_grad = False
-            target = target.long()
-
-            out = net(x)
-            loss = criterion(out, target)
-
-            # for fedprox
-            fed_prox_reg = 0.0
-            for param_index, param in enumerate(net.parameters()):
-                fed_prox_reg += ((mu / 2) * torch.norm((param - global_weight_collector[param_index])) ** 2)
-            loss += fed_prox_reg
-
-            loss.backward()
-            optimizer.step()
-
-            cnt += 1
-            epoch_loss_collector.append(loss.item())
-
-        epoch_loss = sum(epoch_loss_collector) / len(epoch_loss_collector)
-        logger.info('Epoch: %d Loss: %f' % (epoch, epoch_loss))
-
-        # if epoch % 10 == 0:
-        #     train_acc = compute_accuracy(net, train_dataloader, device=device)
-        #     test_acc, conf_matrix = compute_accuracy(net, test_dataloader, get_confusion_matrix=True, device=device)
-        #
-        #     logger.info('>> Training accuracy: %f' % train_acc)
-        #     logger.info('>> Test accuracy: %f' % test_acc)
-
-    train_acc = compute_accuracy(net, train_dataloader, device=device)
-    test_acc, conf_matrix = compute_accuracy(net, test_dataloader, get_confusion_matrix=True, device=device)
-
-    logger.info('>> Training accuracy: %f' % train_acc)
-    logger.info('>> Test accuracy: %f' % test_acc)
-
-    net.to('cpu')
-    logger.info(' ** Training complete **')
-    return train_acc, test_acc
-
-
-def train_net_scaffold(net_id, net, global_model, c_local, c_global, train_dataloader, test_dataloader, epochs, lr,
-                       args_optimizer, device="cpu"):
-    logger.info('Training network %s' % str(net_id))
-
-    train_acc = compute_accuracy(net, train_dataloader, device=device)
-    test_acc, conf_matrix = compute_accuracy(net, test_dataloader, get_confusion_matrix=True, device=device)
-
-    logger.info('>> Pre-Training Training accuracy: {}'.format(train_acc))
-    logger.info('>> Pre-Training Test accuracy: {}'.format(test_acc))
-
-    if args_optimizer == 'adam':
-        optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr, weight_decay=args.reg)
-    elif args_optimizer == 'amsgrad':
-        optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr, weight_decay=args.reg,
-                               amsgrad=True)
-    elif args_optimizer == 'sgd':
-        optimizer = optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=lr, momentum=args.rho,
-                              weight_decay=args.reg)
-    criterion = nn.CrossEntropyLoss().to(device)
-
-    cnt = 0
-    if type(train_dataloader) == type([1]):
-        pass
-    else:
-        train_dataloader = [train_dataloader]
-
-    # writer = SummaryWriter()
-
-    c_local.to(device)
-    c_global.to(device)
-    global_model.to(device)
-
-    c_global_para = c_global.state_dict()
-    c_local_para = c_local.state_dict()
-
-    for epoch in range(epochs):
-        epoch_loss_collector = []
-        for tmp in train_dataloader:
-            for batch_idx, (x, target) in enumerate(tmp):
-                x, target = x.to(device), target.to(device)
-
-                optimizer.zero_grad()
-                x.requires_grad = True
-                target.requires_grad = False
-                target = target.long()
-
-                out = net(x)
-                loss = criterion(out, target)
-
-                loss.backward()
-                optimizer.step()
-
-                net_para = net.state_dict()
-                for key in net_para:
-                    net_para[key] = net_para[key] - args.lr * (c_global_para[key] - c_local_para[key])
-                net.load_state_dict(net_para)
-
-                cnt += 1
-                epoch_loss_collector.append(loss.item())
-
-        epoch_loss = sum(epoch_loss_collector) / len(epoch_loss_collector)
-        logger.info('Epoch: %d Loss: %f' % (epoch, epoch_loss))
-
-    c_new_para = c_local.state_dict()
-    c_delta_para = copy.deepcopy(c_local.state_dict())
-    global_model_para = global_model.state_dict()
-    net_para = net.state_dict()
-    for key in net_para:
-        c_new_para[key] = c_new_para[key] - c_global_para[key] + (global_model_para[key] - net_para[key]) / (
-                cnt * args.lr)
-        c_delta_para[key] = c_new_para[key] - c_local_para[key]
-    c_local.load_state_dict(c_new_para)
-
-    train_acc = compute_accuracy(net, train_dataloader, device=device)
-    test_acc, conf_matrix = compute_accuracy(net, test_dataloader, get_confusion_matrix=True, device=device)
-
-    logger.info('>> Training accuracy: %f' % train_acc)
-    logger.info('>> Test accuracy: %f' % test_acc)
-
-    net.to('cpu')
-    logger.info(' ** Training complete **')
-    return train_acc, test_acc, c_delta_para
-
-
-def train_net_fednova(net_id, net, global_model, train_dataloader, test_dataloader, epochs, lr, args_optimizer,
-                      device="cpu"):
-    logger.info('Training network %s' % str(net_id))
-
-    train_acc = compute_accuracy(net, train_dataloader, device=device)
-    test_acc, conf_matrix = compute_accuracy(net, test_dataloader, get_confusion_matrix=True, device=device)
-
-    logger.info('>> Pre-Training Training accuracy: {}'.format(train_acc))
-    logger.info('>> Pre-Training Test accuracy: {}'.format(test_acc))
-
-    optimizer = optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=lr, momentum=args.rho,
-                          weight_decay=args.reg)
-    criterion = nn.CrossEntropyLoss().to(device)
-
-    if type(train_dataloader) == type([1]):
-        pass
-    else:
-        train_dataloader = [train_dataloader]
-
-    # writer = SummaryWriter()
-
-    tau = 0
-
-    for epoch in range(epochs):
-        epoch_loss_collector = []
-        for tmp in train_dataloader:
-            for batch_idx, (x, target) in enumerate(tmp):
-                x, target = x.to(device), target.to(device)
-
-                optimizer.zero_grad()
-                x.requires_grad = True
-                target.requires_grad = False
-                target = target.long()
-
-                out = net(x)
-                loss = criterion(out, target)
-
-                loss.backward()
-                optimizer.step()
-
-                tau = tau + 1
-
-                epoch_loss_collector.append(loss.item())
-
-        epoch_loss = sum(epoch_loss_collector) / len(epoch_loss_collector)
-        logger.info('Epoch: %d Loss: %f' % (epoch, epoch_loss))
-
-    global_model.to(device)
-    a_i = (tau - args.rho * (1 - pow(args.rho, tau)) / (1 - args.rho)) / (1 - args.rho)
-    global_model.to(device)
-    global_model_para = global_model.state_dict()
-    net_para = net.state_dict()
-    norm_grad = copy.deepcopy(global_model.state_dict())
-    for key in norm_grad:
-        # norm_grad[key] = (global_model_para[key] - net_para[key]) / a_i
-        norm_grad[key] = torch.true_divide(global_model_para[key] - net_para[key], a_i)
-    train_acc = compute_accuracy(net, train_dataloader, device=device)
-    test_acc, conf_matrix = compute_accuracy(net, test_dataloader, get_confusion_matrix=True, device=device)
-
-    logger.info('>> Training accuracy: %f' % train_acc)
-    logger.info('>> Test accuracy: %f' % test_acc)
-
-    net.to('cpu')
-    logger.info(' ** Training complete **')
-    return train_acc, test_acc, a_i, norm_grad
-
-
-def train_net_moon(net_id, net, global_net, previous_nets, train_dataloader, test_dataloader, epochs, lr,
-                   args_optimizer, mu, temperature, args,
-                   round, device="cpu"):
-    logger.info('Training network %s' % str(net_id))
-
-    train_acc = compute_accuracy(net, train_dataloader, moon_model=True, device=device)
-    test_acc, conf_matrix = compute_accuracy(net, test_dataloader, get_confusion_matrix=True, moon_model=True,
-                                             device=device)
-
-    logger.info('>> Pre-Training Training accuracy: {}'.format(train_acc))
-    logger.info('>> Pre-Training Test accuracy: {}'.format(test_acc))
-
-    # conloss = ContrastiveLoss(temperature)
-
-    if args_optimizer == 'adam':
-        optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr, weight_decay=args.reg)
-    elif args_optimizer == 'amsgrad':
-        optimizer = optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=lr, weight_decay=args.reg,
-                               amsgrad=True)
-    elif args_optimizer == 'sgd':
-        optimizer = optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=lr, momentum=0.9,
-                              weight_decay=args.reg)
-
-    criterion = nn.CrossEntropyLoss().to(device)
-    # global_net.to(device)
-
-    if args.loss != 'l2norm':
-        for previous_net in previous_nets:
-            previous_net.to(device)
-    global_w = global_net.state_dict()
-    # oppsi_nets = copy.deepcopy(previous_nets)
-    # for net_id, oppsi_net in enumerate(oppsi_nets):
-    #     oppsi_w = oppsi_net.state_dict()
-    #     prev_w = previous_nets[net_id].state_dict()
-    #     for key in oppsi_w:
-    #         oppsi_w[key] = 2*global_w[key] - prev_w[key]
-    #     oppsi_nets.load_state_dict(oppsi_w)
-    cnt = 0
-    cos = torch.nn.CosineSimilarity(dim=-1).to(device)
-    # mu = 0.001
-
-    for epoch in range(epochs):
-        epoch_loss_collector = []
-        epoch_loss1_collector = []
-        epoch_loss2_collector = []
-        for batch_idx, (x, target) in enumerate(train_dataloader):
-            x, target = x.to(device), target.to(device)
-            if target.shape[0] == 1:
-                continue
-
-            optimizer.zero_grad()
-            x.requires_grad = True
-            target.requires_grad = False
-            target = target.long()
-
-            _, pro1, out = net(x)
-            _, pro2, _ = global_net(x)
-            if args.loss == 'l2norm':
-                loss2 = mu * torch.mean(torch.norm(pro2 - pro1, dim=1))
-
-            elif args.loss == 'only_contrastive' or args.loss == 'contrastive':
-                posi = cos(pro1, pro2)
-                logits = posi.reshape(-1, 1)
-
-                for previous_net in previous_nets:
-                    previous_net.to(device)
-                    _, pro3, _ = previous_net(x)
-                    nega = cos(pro1, pro3)
-                    logits = torch.cat((logits, nega.reshape(-1, 1)), dim=1)
-
-                    # previous_net.to('cpu')
-
-                logits /= temperature
-                labels = torch.zeros(x.size(0)).to(device).long()
-
-                # loss = criterion(out, target) + mu * ContraLoss(pro1, pro2, pro3)
-
-                loss2 = mu * criterion(logits, labels)
-
-            if args.loss == 'only_contrastive':
-                loss = loss2
-            else:
-                loss1 = criterion(out, target)
-                loss = loss1 + loss2
-
-            loss.backward()
-            optimizer.step()
-
-            cnt += 1
-            epoch_loss_collector.append(loss.item())
-            epoch_loss1_collector.append(loss1.item())
-            epoch_loss2_collector.append(loss2.item())
-
-        epoch_loss = sum(epoch_loss_collector) / len(epoch_loss_collector)
-        epoch_loss1 = sum(epoch_loss1_collector) / len(epoch_loss1_collector)
-        epoch_loss2 = sum(epoch_loss2_collector) / len(epoch_loss2_collector)
-        logger.info('Epoch: %d Loss: %f Loss1: %f Loss2: %f' % (epoch, epoch_loss, epoch_loss1, epoch_loss2))
-
-    if args.loss != 'l2norm':
-        for previous_net in previous_nets:
-            previous_net.to('cpu')
-    train_acc = compute_accuracy(net, train_dataloader, moon_model=True, device=device)
-    test_acc, conf_matrix = compute_accuracy(net, test_dataloader, get_confusion_matrix=True, moon_model=True,
-                                             device=device)
-
-    logger.info('>> Training accuracy: %f' % train_acc)
-    logger.info('>> Test accuracy: %f' % test_acc)
-    net.to('cpu')
-    logger.info(' ** Training complete **')
-    return train_acc, test_acc
-
-
-def view_image(train_dataloader):
-    for (x, target) in train_dataloader:
-        np.save("img.npy", x)
-        print(x.shape)
-        exit(0)
-
 
 def find_largest_k_indices_excluding_idx(lst, k, n):
-    # 创建一个新列表，包括所有元素的索引和值，但排除第n个元素
+    # Create a new list, including the indexes and values of all elements, but excluding the nth element
     elements_with_indices = [(index, value) for index, value in enumerate(lst) if index != n]
-
-    # 使用heapq.nlargest找到最大的k个元素及其原始索引，按元素值排序
+    # Use heapq.nlargest to find the largest k elements and their raw indexes, sorted by element value
     largest_k = heapq.nlargest(k, elements_with_indices, key=lambda x: x[1])
     return [index for index, value in largest_k]
 
 
-def local_train_FedCollab_net(nets_this_round, selected, args, train_dl_global, val_dl_global, relevance_vectors,
-                              test_dl=None, device="cpu", ):
+def local_train_net_and_aggregation_pmodel(nets_this_round, args, train_dl_global,  relevance_vectors,  device ):
     nets = {}
-
     for net_single in nets_this_round:
         nets_this_round[net_single].to(device)
     for idx in range(args.n_parties):
         relevance_vector = relevance_vectors[idx]
-        # for net_id, net in nets_this_round.items():
+
         train_local_dl = train_dl_global[idx]
         net = nets_this_round[idx]
 
@@ -692,7 +302,7 @@ def local_train_FedCollab_net(nets_this_round, selected, args, train_dl_global, 
         elif args.optimizer == 'sgd':
             optimizer = optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=args.lr, momentum=0.9,
                                   weight_decay=args.reg)
-            # optimizer = optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=args.lr)
+
         criterion = torch.nn.CrossEntropyLoss().to(device)
 
         net.train()
@@ -701,10 +311,9 @@ def local_train_FedCollab_net(nets_this_round, selected, args, train_dl_global, 
         else:
             train_local_dl = [train_local_dl]
 
-        # for iteration in range(args.num_local_iterations):
         n_epoch = args.epochs
         for epoch in range(n_epoch):
-            epoch_loss_collector = []
+
             for tmp in train_local_dl:
                 for batch_idx, (x, target) in enumerate(tmp):
                     x, target = x.to(device), target.to(device)
@@ -720,11 +329,6 @@ def local_train_FedCollab_net(nets_this_round, selected, args, train_dl_global, 
                     loss.backward()
                     optimizer.step()
 
-                    epoch_loss_collector.append(loss.item())
-
-            epoch_loss = sum(epoch_loss_collector) / len(epoch_loss_collector)
-            # logger.info('Client: %d, Epoch: %d Loss: %f' % (idx + 1, epoch, epoch_loss))
-            # print("Client: {}， Epoch: {} Loss: {}".format(idx + 1, epoch, epoch_loss))
 
     for idx in range(args.n_parties):
         relevance_vector = relevance_vectors[idx]
@@ -756,19 +360,9 @@ def local_train_pFedSV_net(nets_this_round, selected, args, train_dl_global, val
     for net_single in nets_this_round:
         nets_this_round[net_single].to(device)
     for idx in range(args.n_parties):
-        # for net_id, net in nets_this_round.items():
+
         train_local_dl = train_dl_global[idx]
         net = nets_this_round[idx]
-        # # Model Aggregation
-        # for net_id, net in enumerate(nets_this_round.values()):
-        #     net_para = net.state_dict()
-        #     if net_id == 0:
-        #         for key in net_para:
-        #             global_w[key] = net_para[key] * fed_avg_freqs[net_id]
-        #     else:
-        #         for key in net_para:
-        #             global_w[key] += net_para[key] * fed_avg_freqs[net_id]
-        #
 
         # Set Optimizer
         if args.optimizer == 'adam':
@@ -781,7 +375,6 @@ def local_train_pFedSV_net(nets_this_round, selected, args, train_dl_global, val
         elif args.optimizer == 'sgd':
             optimizer = optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=args.lr, momentum=0.9,
                                   weight_decay=args.reg)
-            # optimizer = optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=args.lr)
         criterion = torch.nn.CrossEntropyLoss().to(device)
 
         net.train()
@@ -790,10 +383,8 @@ def local_train_pFedSV_net(nets_this_round, selected, args, train_dl_global, val
         else:
             train_local_dl = [train_local_dl]
 
-        # for iteration in range(args.num_local_iterations):
         n_epoch = args.epochs
         for epoch in range(n_epoch):
-            epoch_loss_collector = []
             for tmp in train_local_dl:
                 for batch_idx, (x, target) in enumerate(tmp):
                     x, target = x.to(device), target.to(device)
@@ -805,17 +396,10 @@ def local_train_pFedSV_net(nets_this_round, selected, args, train_dl_global, val
 
                     out = net(x)
                     loss = criterion(out, target)
-                    # print("loss {}".format(loss))
+
                     loss.backward()
                     optimizer.step()
 
-                    epoch_loss_collector.append(loss.item())
-
-            epoch_loss = sum(epoch_loss_collector) / len(epoch_loss_collector)
-            # logger.info('Epoch: %d Loss: %f' % (epoch, epoch_loss))
-            # print("Epoch: {} Loss: {}".format(epoch, epoch_loss))
-
-    start_time = time.time()
 
     for idx in range(args.n_parties):
         train_local_dl = train_dl_global[idx]
@@ -852,9 +436,7 @@ def local_train_pFedSV_net(nets_this_round, selected, args, train_dl_global, val
                     sum_w[key] += net_para[key] * weight_vector[idd]
         ini_net.load_state_dict(sum_w)
         nets[idx] = ini_net
-    end_time = time.time()
-    elapsed_time = end_time - start_time
-    print(f"程序运行时间: {elapsed_time} 秒")
+
 
     return nets
     pass
@@ -874,229 +456,16 @@ def local_train_net(nets, selected, args, data_distributions, train_dl_global, v
         # move the model to cuda device:
         net.to(device)
 
-        # noise_level = args.noise
-        # if net_id == args.n_parties - 1:
-        #     noise_level = 0
-        #
-        # if args.noise_type == 'space':
-        #     train_dl_local, test_dl_local, _, _ = get_dataloader(args.dataset, args.datadir, args.batch_size, 32,
-        #                                                          dataidxs, noise_level, net_id, args.n_parties - 1)
-        # else:
-        #     noise_level = args.noise / (args.n_parties - 1) * net_id
-        #     train_dl_local, test_dl_local, _, _ = get_dataloader(args.dataset, args.datadir, args.batch_size, 32,
-        #                                                          dataidxs, noise_level)
-        # train_dl_global, test_dl_global, _, _ = get_dataloader(args.dataset, args.datadir, args.batch_size, 32)
         n_epoch = args.epochs
 
         train_net(net_id, net, data_distribution, train_dl_global[net_id], val_dl_global[net_id], test_dl, n_epoch,
                   args.lr, args.optimizer, device=device)
-        # logger.info("net %d final val acc %f" % (net_id, testacc))
-        # print("net : {} testacc: {}".format(net_id, testacc))
-        # avg_acc += testacc
-        # saving the trained models here
-        # save_model(net, net_id, args)
-        # else:
-        #     load_model(net, net_id, device=device)
-    # avg_acc /= len(selected)
-    # if args.alg == 'local_training':
-    #     logger.info("avg test acc %f" % avg_acc)
+
 
     nets_list = nets
     return nets_list
 
 
-def local_train_net_fedprox(nets, selected, global_model, args, net_dataidx_map, test_dl=None, device="cpu"):
-    avg_acc = 0.0
-
-    for net_id, net in nets.items():
-        if net_id not in selected:
-            continue
-        dataidxs = net_dataidx_map[net_id]
-
-        logger.info("Training network %s. n_training: %d" % (str(net_id), len(dataidxs)))
-        # move the model to cuda device:
-        net.to(device)
-
-        noise_level = args.noise
-        if net_id == args.n_parties - 1:
-            noise_level = 0
-
-        if args.noise_type == 'space':
-            train_dl_local, test_dl_local, _, _ = get_dataloader(args.dataset, args.datadir, args.batch_size, 32,
-                                                                 dataidxs, noise_level, net_id, args.n_parties - 1)
-        else:
-            noise_level = args.noise / (args.n_parties - 1) * net_id
-            train_dl_local, test_dl_local, _, _ = get_dataloader(args.dataset, args.datadir, args.batch_size, 32,
-                                                                 dataidxs, noise_level)
-        train_dl_global, test_dl_global, _, _ = get_dataloader(args.dataset, args.datadir, args.batch_size, 32)
-        n_epoch = args.epochs
-
-        trainacc, testacc = train_net_fedprox(net_id, net, global_model, train_dl_local, test_dl, n_epoch, args.lr,
-                                              args.optimizer, args.mu, device=device)
-        logger.info("net %d final test acc %f" % (net_id, testacc))
-        avg_acc += testacc
-    avg_acc /= len(selected)
-    if args.alg == 'local_training':
-        logger.info("avg test acc %f" % avg_acc)
-
-    nets_list = list(nets.values())
-    return nets_list
-
-
-def local_train_net_scaffold(nets, selected, global_model, c_nets, c_global, args, net_dataidx_map, test_dl=None,
-                             device="cpu"):
-    avg_acc = 0.0
-
-    total_delta = copy.deepcopy(global_model.state_dict())
-    for key in total_delta:
-        total_delta[key] = 0.0
-    c_global.to(device)
-    global_model.to(device)
-    for net_id, net in nets.items():
-        if net_id not in selected:
-            continue
-        dataidxs = net_dataidx_map[net_id]
-
-        logger.info("Training network %s. n_training: %d" % (str(net_id), len(dataidxs)))
-        # move the model to cuda device:
-        net.to(device)
-
-        c_nets[net_id].to(device)
-
-        noise_level = args.noise
-        if net_id == args.n_parties - 1:
-            noise_level = 0
-
-        if args.noise_type == 'space':
-            train_dl_local, test_dl_local, _, _ = get_dataloader(args.dataset, args.datadir, args.batch_size, 32,
-                                                                 dataidxs, noise_level, net_id, args.n_parties - 1)
-        else:
-            noise_level = args.noise / (args.n_parties - 1) * net_id
-            train_dl_local, test_dl_local, _, _ = get_dataloader(args.dataset, args.datadir, args.batch_size, 32,
-                                                                 dataidxs, noise_level)
-        train_dl_global, test_dl_global, _, _ = get_dataloader(args.dataset, args.datadir, args.batch_size, 32)
-        n_epoch = args.epochs
-
-        trainacc, testacc, c_delta_para = train_net_scaffold(net_id, net, global_model, c_nets[net_id], c_global,
-                                                             train_dl_local, test_dl, n_epoch, args.lr, args.optimizer,
-                                                             device=device)
-
-        c_nets[net_id].to('cpu')
-        for key in total_delta:
-            total_delta[key] += c_delta_para[key]
-
-        logger.info("net %d final test acc %f" % (net_id, testacc))
-        avg_acc += testacc
-    for key in total_delta:
-        total_delta[key] /= args.n_parties
-    c_global_para = c_global.state_dict()
-    for key in c_global_para:
-        if c_global_para[key].type() == 'torch.LongTensor':
-            c_global_para[key] += total_delta[key].type(torch.LongTensor)
-        elif c_global_para[key].type() == 'torch.cuda.LongTensor':
-            c_global_para[key] += total_delta[key].type(torch.cuda.LongTensor)
-        else:
-            # print(c_global_para[key].type())
-            c_global_para[key] += total_delta[key]
-    c_global.load_state_dict(c_global_para)
-
-    avg_acc /= len(selected)
-    if args.alg == 'local_training':
-        logger.info("avg test acc %f" % avg_acc)
-
-    nets_list = list(nets.values())
-    return nets_list
-
-
-def local_train_net_fednova(nets, selected, global_model, args, net_dataidx_map, test_dl=None, device="cpu"):
-    avg_acc = 0.0
-
-    a_list = []
-    d_list = []
-    n_list = []
-    global_model.to(device)
-    for net_id, net in nets.items():
-        if net_id not in selected:
-            continue
-        dataidxs = net_dataidx_map[net_id]
-
-        logger.info("Training network %s. n_training: %d" % (str(net_id), len(dataidxs)))
-        # move the model to cuda device:
-        net.to(device)
-
-        noise_level = args.noise
-        if net_id == args.n_parties - 1:
-            noise_level = 0
-
-        if args.noise_type == 'space':
-            train_dl_local, test_dl_local, _, _ = get_dataloader(args.dataset, args.datadir, args.batch_size, 32,
-                                                                 dataidxs, noise_level, net_id, args.n_parties - 1)
-        else:
-            noise_level = args.noise / (args.n_parties - 1) * net_id
-            train_dl_local, test_dl_local, _, _ = get_dataloader(args.dataset, args.datadir, args.batch_size, 32,
-                                                                 dataidxs, noise_level)
-        train_dl_global, test_dl_global, _, _ = get_dataloader(args.dataset, args.datadir, args.batch_size, 32)
-        n_epoch = args.epochs
-
-        trainacc, testacc, a_i, d_i = train_net_fednova(net_id, net, global_model, train_dl_local, test_dl, n_epoch,
-                                                        args.lr, args.optimizer, device=device)
-
-        a_list.append(a_i)
-        d_list.append(d_i)
-        n_i = len(train_dl_local.dataset)
-        n_list.append(n_i)
-        logger.info("net %d final test acc %f" % (net_id, testacc))
-        avg_acc += testacc
-
-    avg_acc /= len(selected)
-    if args.alg == 'local_training':
-        logger.info("avg test acc %f" % avg_acc)
-
-    nets_list = list(nets.values())
-    return nets_list, a_list, d_list, n_list
-
-
-def local_train_net_moon(nets, selected, args, net_dataidx_map, test_dl=None, global_model=None, prev_model_pool=None,
-                         round=None, device="cpu"):
-    avg_acc = 0.0
-    global_model.to(device)
-    for net_id, net in nets.items():
-        if net_id not in selected:
-            continue
-        dataidxs = net_dataidx_map[net_id]
-
-        logger.info("Training network %s. n_training: %d" % (str(net_id), len(dataidxs)))
-        net.to(device)
-
-        noise_level = args.noise
-        if net_id == args.n_parties - 1:
-            noise_level = 0
-
-        if args.noise_type == 'space':
-            train_dl_local, test_dl_local, _, _ = get_dataloader(args.dataset, args.datadir, args.batch_size, 32,
-                                                                 dataidxs, noise_level, net_id, args.n_parties - 1)
-        else:
-            noise_level = args.noise / (args.n_parties - 1) * net_id
-            train_dl_local, test_dl_local, _, _ = get_dataloader(args.dataset, args.datadir, args.batch_size, 32,
-                                                                 dataidxs, noise_level)
-        train_dl_global, test_dl_global, _, _ = get_dataloader(args.dataset, args.datadir, args.batch_size, 32)
-        n_epoch = args.epochs
-
-        prev_models = []
-        for i in range(len(prev_model_pool)):
-            prev_models.append(prev_model_pool[i][net_id])
-        trainacc, testacc = train_net_moon(net_id, net, global_model, prev_models, train_dl_local, test_dl, n_epoch,
-                                           args.lr,
-                                           args.optimizer, args.mu, args.temperature, args, round, device=device)
-        logger.info("net %d final test acc %f" % (net_id, testacc))
-        avg_acc += testacc
-
-    avg_acc /= len(selected)
-    if args.alg == 'local_training':
-        logger.info("avg test acc %f" % avg_acc)
-    global_model.to('cpu')
-    nets_list = list(nets.values())
-    return nets_list
 
 
 def get_partition_dict(dataset, partition, n_parties, init_seed=0, datadir='./data', logdir='./logs', beta=0.5):
@@ -1176,7 +545,7 @@ def aggregation_by_graph(cfg, graph_matrix, nets_this_round, global_w):
     return cluster_model_vectors
 
 
-def weight_flatten(model):  # 只是比较全连接层
+def weight_flatten(model):
     params = []
     for k in model:
         if 'fc' in k:
@@ -1223,8 +592,9 @@ def cal_model_cosine_difference(nets_this_round, initial_global_parameters, dw, 
     for i in range(len(nets_this_round)):
         model_i = nets_this_round[index_clientid[i]].state_dict()
         for key in dw[index_clientid[i]]:
+            # Calculate the gap between each client model at the beginning (global model down) and end of local training
             dw[index_clientid[i]][key] = model_i[key] - initial_global_parameters[
-                key]  # 算出各个客户端模型在本地训练开始时（全局模型下发）和结束时的差距
+                key]
     for i in range(len(nets_this_round)):
         for j in range(i, len(nets_this_round)):
             if similarity_matric == "all":
@@ -1252,14 +622,11 @@ def update_graph_matrix_neighbor(graph_matrix, nets_this_round, initial_global_p
     index_clientid = list(nets_this_round.keys())
     # model_difference_matrix = cal_model_difference(index_clientid, nets_this_round, nets_param_start, difference_measure)
     model_difference_matrix = cal_model_cosine_difference(nets_this_round, initial_global_parameters, dw,
-                                                          similarity_matric)  # 得到了各个model这次训练完成后模型参数的之间的cosine
-    # model_difference_matrix_numpy = model_difference_matrix.numpy()+1
-    # print(model_difference_matrix_numpy)
-    # save_heatmap(args, model_difference_matrix.numpy()+1)
+                                                          similarity_matric)
+
     graph_matrix = optimizing_graph_matrix_neighbor(graph_matrix, index_clientid, model_difference_matrix, lambda_1,
                                                     fed_avg_freqs)
-    # print(f'Model difference: {model_difference_matrix[0]}')
-    # print(f'Graph matrix: {graph_matrix}')
+
     return graph_matrix
 
 
@@ -1270,21 +637,6 @@ def local_train_pfedgraph(args, round, nets_this_round, cluster_models, train_lo
 
         train_local_dl = train_local_dls[net_id]
         data_distribution = data_distributions[net_id]
-
-        # if net_id in benign_client_list:
-        #
-        #     val_acc = compute_accuracy(net, val_local_dls[net_id], device=device)
-        #     personalized_test_acc, generalized_test_acc = compute_local_test_accuracy(net, test_dl, data_distribution,
-        #                                                                               device=device)
-        #
-        #     if val_acc > best_val_acc_list[net_id]:
-        #         best_val_acc_list[net_id] = val_acc
-        #         best_test_acc_list[net_id] = personalized_test_acc
-        #     print('>> Client {} test1 | (Pre) Personalized Test Acc: ({:.5f}) | Generalized Test Acc: {:.5f}'.format(
-        #         net_id, personalized_test_acc, generalized_test_acc))
-        #
-        #     logger.info('>> Pre-Training val accuracy: {}'.format(val_acc))
-        #     logger.info('>> Pre-Training personalized_test accuracy: {}'.format(personalized_test_acc))
 
         # Set Optimizer
         if args.optimizer == 'adam':
@@ -1309,7 +661,6 @@ def local_train_pfedgraph(args, round, nets_this_round, cluster_models, train_lo
         else:
             train_local_dl = [train_local_dl]
 
-        # writer = SummaryWriter()
 
         for epoch in range(args.epochs):
             epoch_loss_collector = []
@@ -1336,24 +687,8 @@ def local_train_pfedgraph(args, round, nets_this_round, cluster_models, train_lo
 
                     loss.backward()
                     optimizer.step()
-
                     epoch_loss_collector.append(loss.item())
 
-        # if net_id in benign_client_list:
-        #     train_acc = compute_accuracy(net, train_local_dl, device=device)
-        #     val_acc = compute_accuracy(net, val_local_dls[net_id], device=device)
-        #     personalized_test_acc, generalized_test_acc = compute_local_test_accuracy(net, test_dl, data_distribution,
-        #                                                                               device=device)
-        #
-        #     if val_acc > best_val_acc_list[net_id]:
-        #         best_val_acc_list[net_id] = val_acc
-        #         best_test_acc_list[net_id] = personalized_test_acc
-        #     print('>> Client {} test2 | (Pre) Personalized Test Acc: ({:.5f}) | Generalized Test Acc: {:.5f}'.format(
-        #         net_id, personalized_test_acc, generalized_test_acc))
-        #
-        #     logger.info('>> clint %s, Training accuracy: %f' % (net_id, train_acc))
-        #     logger.info('>> clint %s, Test accuracy: %f' % (net_id, val_acc))
-        #     logger.info('>> clint %s, personalized_test accuracy: %f' % (net_id, personalized_test_acc))
         net.to('cpu')
     return np.array(best_test_acc_list)[np.array(benign_client_list)].mean()
 
@@ -1444,42 +779,6 @@ def local_train_pfedcollab(args, net, train_dl_local, loss_func, metric_func, nu
 
     return avg_loss, avg_metric
 
-    # if type(train_dl_local) == type([1]):
-    #     pass
-    # else:
-    #     train_dataloader = [train_dl_local]
-    # total_examples, total_loss, total_metric = 0, 0, 0
-    #
-    # for tmp in train_dataloader:
-    #     for batch_idx, (x, target) in enumerate(tmp):
-    #         x, target = x.to(device), target.to(device)
-    #
-    #         optimizer.zero_grad()
-    #         x.requires_grad = True
-    #         target.requires_grad = False
-    #         D = torch.ones_like(target) * int(domain_id)
-    #         target = target.long()
-    #
-    #         out = net(x)
-    #         linear2 = nn.Linear(10, 1).cuda()
-    #         logits = linear2(out)
-    #         loss = loss_func(logits, D)
-    #
-    #         loss.backward()
-    #         optimizer.step()
-    #         with torch.no_grad():
-    #             # record the loss and accuracy
-    #             num_examples = len(x)
-    #             total_examples += num_examples
-    #             total_loss += loss.item() * num_examples
-    #
-    #             metric = metric_func(logits, D)
-    #             total_metric += metric.item() * num_examples
-    #
-    # avg_loss, avg_metric = total_loss / total_examples, total_metric / total_examples
-    #
-    # return avg_loss, avg_metric
-
 
 def state_to_tensor(model_state_dict):
     """
@@ -1526,16 +825,13 @@ def estimate_all(args, train_dl_global, net):
     loss_func = lambda output, target: F.binary_cross_entropy_with_logits(output.view(-1), target.view(-1).float())
 
     model.to(args.device)
-
-    # disc_type = args.divergence
-    # 选择disc_type = 'C'
     num_rounds = 10
 
     # initialize an empty pairwise discrepancy matrix
     disc_matrix = torch.zeros((args.n_parties, args.n_parties))
     init_state = copy.deepcopy(model.state_dict())
     num_iters = 1
-    for i, j in tqdm(combinations(range(args.n_parties), 2)):  # combinations(range(num_clients), 2)来生成所有可能的客户端对
+    for i, j in tqdm(combinations(range(args.n_parties), 2)):
         best_metric = - np.inf
         rounds_no_improve = 0
         client_i, client_j = i, j
@@ -1553,12 +849,12 @@ def estimate_all(args, train_dl_global, net):
                                                       num_iters, 1)
             state_j = copy.deepcopy(model.state_dict())
             # ======== ======== server ======== ========
-            # 在服务器端比较两个client更新的模型参数，完全拉成一维向量进行比较
+            # Compare the model parameters updated by the two clients on the server side, pulling them into a one-dimensional vector for comparison
             # aggregate and get the new global model
             tensor_i, tensor_j = state_to_tensor(state_i), state_to_tensor(state_j)
             tensor_g = (tensor_i + tensor_j) / 2
             state_g = tensor_to_state(tensor_g, model_state_dict_template=global_model.state_dict())
-            # print(state_g)
+
             # evaluation divergence
             if r % 10 == 0:
                 model.load_state_dict(state_dict=state_g, strict=False)
@@ -1592,7 +888,7 @@ def estimate_all(args, train_dl_global, net):
         # metric = metric_i + metric_j
 
         metric = best_metric
-        # Algorithm 1 最后一行
+
 
         metric = metric - 1  # save 1/2 divergence
 
@@ -1766,44 +1062,18 @@ def sketch_input(K, R, d, hashes, localdata_idx, train_dl):
     return race.counts, race.N
 
 
-def save_heatmap(args, relevance_vectors):
-    logger.info('>>Solved relevance:' + str(relevance_vectors))
-    sys.exit("Terminating the program")
-
-
-# def save_heatmap(args, relevance_vectors):
-#     if isinstance(data, np.ndarray):
-#         pass
-#     else:
-#         distance_matrix = np.array(relevance_vectors)
-#     sns.heatmap(distance_matrix, annot=False, cmap='viridis', cbar=True, square=True)
-#     # plt.title('Distance Matrix Heatmap')
-#     plt.xlabel('Client Index')
-#     plt.ylabel('Client Index')
-#     current_dir = os.path.dirname(os.path.abspath(__file__))
-#     # plt.show()
-#     if args.partition == 'homo':
-#         if args.noise == 0.1:
-#             path = './figures/heatmap/' + args.alg + '/noise.svg'
-#         else:
-#             path ='./figures/heatmap/' + args.alg + '/IID.svg'
-#     else:
-#         path ='./figures/heatmap/' + args.alg + '/' + args.partition + '.svg'
-#     plt.savefig(os.path.join(current_dir, path))
-#     sys.exit("Terminating the program")
 def js_divergence(p, q):
 
     p = torch.clamp(p, min=1e-10)
     q = torch.clamp(q, min=1e-10)
-    m = 0.5 * (p + q)
-    log_m = torch.log(m)
-
+    mm = 0.5 * (p + q)
+    log_m = torch.log(mm)
 
     kl_p = F.kl_div(log_m, p, reduction='batchmean')
     kl_q = F.kl_div(log_m, q, reduction='batchmean')
-
-
     return 0.5 * (kl_p + kl_q)
+
+
 
 if __name__ == '__main__':
 
@@ -1863,8 +1133,7 @@ if __name__ == '__main__':
 
     train_dl_global, val_dl_global, test_dl_global = get_dataloader(args, args.dataset,
                                                                     args.datadir,
-                                                                    args.batch_size,
-                                                                    32,
+                                                                    args.batch_size, 32,
                                                                     dataidxss=net_dataidx_map)
 
     print("len train_dl_global:", len(train_dl_global))
@@ -1926,24 +1195,32 @@ if __name__ == '__main__':
 
             global_model.to(device)
             train_acc = compute_accuracy(global_model, train_dl_global, device=device)
-            test_acc, conf_matrix = compute_accuracy(global_model, test_dl_global, get_confusion_matrix=True,
-                                                     device=device)
-
+            test_acc, conf_matrix = compute_accuracy(global_model, test_dl_global, get_confusion_matrix=True, device=device)
             logger.info('>> Global Model Train accuracy: %f' % train_acc)
             logger.info('>> Global Model Test accuracy: %f' % test_acc)
+
+            if (round + 1) % args.round_calculate == 0:
+                test_acc_sum = 0
+                ptest_acc_sum = 0
+                for idx in range(args.n_parties):
+                    ptest_acc, test_acc = compute_local_test_accuracy(nets[idx], test_dl_global, data_distributions[idx], device=device)
+                    test_acc_sum = test_acc_sum + test_acc
+                    ptest_acc_sum = ptest_acc_sum + ptest_acc
+                end_test_acc = test_acc_sum / args.n_parties
+                end_ptest_acc = ptest_acc_sum / args.n_parties
+
+                logger.info('>> Global Model ptest accuracy: %f' % end_ptest_acc)
+                logger.info('>> Global Model test accuracy: %f' % end_test_acc)
+                print("round {},ptest acc = {:.5f}".format(round, end_ptest_acc))
+                print("round {},test acc = {:.5f}".format(round, end_test_acc))
+            print('-' * 80)
+
+
     elif args.alg == 'pFedSV':
         logger.info("Initializing nets")
         nets, local_model_meta_data, layer_type = init_nets(args.net_config, args.dropout_p, args.n_parties, args)
         global_models, global_model_meta_data, global_layer_type = init_nets(args.net_config, 0, 1, args)
         global_model = global_models[0]
-
-        total_params = 0
-        total_size = 0
-        for param in nets[0].parameters():
-            num_params = param.numel()
-            total_params += num_params
-            total_size += num_params * param.element_size()
-        print(f"模型参数总大小: {total_size / 1024 / 1024:.2f} MB")
 
         global_para = global_model.state_dict()
         if args.is_same_initial:
@@ -1970,42 +1247,19 @@ if __name__ == '__main__':
 
             next_nets = local_train_pFedSV_net(nets, selected, args, train_dl_global, val_dl_global, relevance_vectors,
                                                test_dl=test_dl_global, device=device)
-            # if round == 9:
-            #     save_heatmap(args, relevance_vectors)
-
             nets = next_nets
-            # local_train_net(nets, selected, args, train_dl_global, val_dl_global, test_dl=test_dl_global, device=device)
-            # local_train_net(nets, args, net_dataidx_map, local_split=False, device=device)
             if (round + 1) % args.round_calculate == 0:
-                # train_acc_sum = 0
-                # val_acc_sum = 0
                 test_acc_sum = 0
                 ptest_acc_sum = 0
                 for idx in range(args.n_parties):
-                    correct, total = 0, 0
-                    # for net_id, net in nets_this_round.items():
-                    val_local_dl = val_dl_global[idx]
-                    train_local_dl = train_dl_global[idx]
-                    net = nets[idx]
-                    # train_acc = compute_accuracy(net, train_local_dl, device=device)
-                    # val_acc = compute_accuracy(net, val_local_dl, device=device)
-                    ptest_acc, test_acc = compute_local_test_accuracy(net, test_dl_global, data_distributions[idx],
-                                                                      device=device)
+                    ptest_acc, test_acc = compute_local_test_accuracy(nets[idx], test_dl_global, data_distributions[idx], device=device)
                     test_acc_sum = test_acc_sum + test_acc
                     ptest_acc_sum = ptest_acc_sum + ptest_acc
-                    # train_acc_sum = train_acc_sum + train_acc
-                    # val_acc_sum = val_acc_sum + val_acc
-                # end_train_acc = train_acc_sum / args.n_parties
-                # end_val_acc = val_acc_sum / args.n_parties
                 end_test_acc = test_acc_sum / args.n_parties
                 end_ptest_acc = ptest_acc_sum / args.n_parties
 
-                # logger.info('>> Global Model Train accuracy: %f' % end_train_acc)
-                # logger.info('>> Global Model Val accuracy: %f' % end_val_acc)
                 logger.info('>> Global Model ptest accuracy: %f' % end_ptest_acc)
                 logger.info('>> Global Model test accuracy: %f' % end_test_acc)
-                # print("round {},train acc = {:.5f}".format(round, end_train_acc))
-                # print("round {},val acc = {:.5f}".format(round, end_val_acc))
                 print("round {},ptest acc = {:.5f}".format(round, end_ptest_acc))
                 print("round {},test acc = {:.5f}".format(round, end_test_acc))
             print('-' * 80)
@@ -2028,10 +1282,8 @@ if __name__ == '__main__':
         local_models = []
         best_val_acc_list, best_test_acc_list = [], []
         js_matrix = [[0 for _ in range(args.n_parties)] for _ in range(args.n_parties)]
-        start_time = time.time()
 
         if args.use_feature:
-            print("\n!!!\n use feature !!!\n!!!")
             for i in range(args.n_parties):
                 for j in range(i+1, args.n_parties):
                     flattened_images1 = []
@@ -2094,7 +1346,6 @@ if __name__ == '__main__':
                     js_matrix[i][j] = min(math.sqrt(abs(JS_divergence / 2)), 1 - 0.5 * math.exp(-JS_divergence))
 
 
-        # save_heatmap(args, js_matrix)
         num_samples = np.array([len(train_dl_global[i]) for i in range(len(train_dl_global))])
         sample_ratio = np.divide(num_samples, sum(num_samples))
         Q, alpha = Compute_alpha(args, js_matrix, sample_ratio, lamda=args.lamda)
@@ -2122,47 +1373,25 @@ if __name__ == '__main__':
                 ini_net.load_state_dict(sum_w)
                 model_this_round_list.append(ini_net)
             nets = {k: model_this_round_list[k] for k in range(len(model_this_round_list))}
-            end_time = time.time()
-            elapsed_time = end_time - start_time
-            print(f"程序运行时间: {elapsed_time} 秒")
+
             for net_idx in nets:
                 nets[net_idx].to(device)
             next_nets = local_train_net(nets, selected, args, data_distributions, train_dl_global, val_dl_global,
                                         test_dl=test_dl_global, device=device)
 
             nets = next_nets
-            # local_train_net(nets, selected, args, train_dl_global, val_dl_global, test_dl=test_dl_global, device=device)
-            # local_train_net(nets, args, net_dataidx_map, local_split=False, device=device)
             if (round + 1) % args.round_calculate == 0:
-                # train_acc_sum = 0
-                # val_acc_sum = 0
                 test_acc_sum = 0
                 ptest_acc_sum = 0
                 for idx in range(args.n_parties):
-                    correct, total = 0, 0
-                    # for net_id, net in nets_this_round.items():
-                    val_local_dl = val_dl_global[idx]
-                    train_local_dl = train_dl_global[idx]
-                    net = nets[idx]
-                    # train_acc = compute_accuracy(net, train_local_dl, device=device)
-                    # val_acc = compute_accuracy(net, val_local_dl, device=device)
-                    ptest_acc, test_acc = compute_local_test_accuracy(net, test_dl_global, data_distributions[idx],
-                                                                      device=device)
+                    ptest_acc, test_acc = compute_local_test_accuracy(nets[idx], test_dl_global, data_distributions[idx], device=device)
                     test_acc_sum = test_acc_sum + test_acc
                     ptest_acc_sum = ptest_acc_sum + ptest_acc
-                    # train_acc_sum = train_acc_sum + train_acc
-                    # val_acc_sum = val_acc_sum + val_acc
-                # end_train_acc = train_acc_sum / args.n_parties
-                # end_val_acc = val_acc_sum / args.n_parties
                 end_test_acc = test_acc_sum / args.n_parties
                 end_ptest_acc = ptest_acc_sum / args.n_parties
 
-                # logger.info('>> Global Model Train accuracy: %f' % end_train_acc)
-                # logger.info('>> Global Model Val accuracy: %f' % end_val_acc)
                 logger.info('>> Global Model ptest accuracy: %f' % end_ptest_acc)
                 logger.info('>> Global Model test accuracy: %f' % end_test_acc)
-                # print("round {},train acc = {:.5f}".format(round, end_train_acc))
-                # print("round {},val acc = {:.5f}".format(round, end_val_acc))
                 print("round {},ptest acc = {:.5f}".format(round, end_ptest_acc))
                 print("round {},test acc = {:.5f}".format(round, end_test_acc))
             print('-' * 80)
@@ -2186,7 +1415,6 @@ if __name__ == '__main__':
         for i in range(args.n_parties):
             best_val_acc_list.append(0)
             best_test_acc_list.append(0)
-            # clients’ relevence vector
             dw.append({key: torch.zeros_like(value) for key, value in nets[i].named_parameters()})
 
         graph_matrix = torch.ones(len(nets), len(nets)) / (len(nets) - 1)  # Collaboration Graph
@@ -2203,58 +1431,27 @@ if __name__ == '__main__':
             mean_personalized_acc = local_train_pfedgraph(args, round, nets, cluster_model_vectors, train_dl_global,
                                                           val_dl_global, test_dl_global, data_distributions,
                                                           best_val_acc_list, best_test_acc_list, benign_client_list)
-            start_time = time.time()
+
             total_data_points = sum([len(net_dataidx_map[k]) for k in benign_client_list])
             fed_avg_freqs = {k: len(net_dataidx_map[k]) / total_data_points for k in benign_client_list}
-
-            # manipulate_gradient(args, None, nets_this_round, benign_client_list, nets_param_start)  # 输入为这轮开始时的model参数以及经过local_train_pfedgraph的本地参数
-
             graph_matrix = update_graph_matrix_neighbor(graph_matrix, nets, global_parameters, dw, fed_avg_freqs,
                                                         args.alpha,
                                                         args.difference_measure)  # Graph Matrix is not normalized yet
             cluster_model_vectors = aggregation_by_graph(args, graph_matrix, nets,
                                                          global_parameters)  # Aggregation weight is normalized here
-            end_time = time.time()
-            elapsed_time = end_time - start_time
-            print(f"程序运行时间: {elapsed_time} 秒")
-            if round == 5:
-                pass
-            if round == 10:
-                pass
-            if round == 20:
-                pass
-            if round ==30:
-                pass
+
             if (round + 1) % args.round_calculate == 0:
-                # train_acc_sum = 0
-                # val_acc_sum = 0
                 test_acc_sum = 0
                 ptest_acc_sum = 0
                 for idx in range(args.n_parties):
-                    correct, total = 0, 0
-                    # for net_id, net in nets_this_round.items():
-                    val_local_dl = val_dl_global[idx]
-                    train_local_dl = train_dl_global[idx]
-                    net = nets[idx]
-                    # train_acc = compute_accuracy(net, train_local_dl, device=device)
-                    # val_acc = compute_accuracy(net, val_local_dl, device=device)
-                    ptest_acc, test_acc = compute_local_test_accuracy(net, test_dl_global, data_distributions[idx],
-                                                                      device=device)
+                    ptest_acc, test_acc = compute_local_test_accuracy(nets[idx], test_dl_global, data_distributions[idx], device=device)
                     test_acc_sum = test_acc_sum + test_acc
                     ptest_acc_sum = ptest_acc_sum + ptest_acc
-                    # train_acc_sum = train_acc_sum + train_acc
-                    # val_acc_sum = val_acc_sum + val_acc
-                # end_train_acc = train_acc_sum / args.n_parties
-                # end_val_acc = val_acc_sum / args.n_parties
                 end_test_acc = test_acc_sum / args.n_parties
                 end_ptest_acc = ptest_acc_sum / args.n_parties
 
-                # logger.info('>> Global Model Train accuracy: %f' % end_train_acc)
-                # logger.info('>> Global Model Val accuracy: %f' % end_val_acc)
                 logger.info('>> Global Model ptest accuracy: %f' % end_ptest_acc)
                 logger.info('>> Global Model test accuracy: %f' % end_test_acc)
-                # print("round {},train acc = {:.5f}".format(round, end_train_acc))
-                # print("round {},val acc = {:.5f}".format(round, end_val_acc))
                 print("round {},ptest acc = {:.5f}".format(round, end_ptest_acc))
                 print("round {},test acc = {:.5f}".format(round, end_test_acc))
             print('-' * 80)
@@ -2266,9 +1463,8 @@ if __name__ == '__main__':
         for i in range(args.n_parties):
             relevance_vectors.append([0 for p in range(args.n_parties)])
         users_used = [i for i in range(args.n_parties)]
-        # net_dataidx_map, traindata_cls_counts, data_distributions, train_dl_global, val_dl_global, test_dl_global
         args.train_pt = True
-        start_time = time.time()
+
         model = Training_all(args, logger, traindata_cls_counts, train_dl_global, val_dl_global, test_dl_global,
                              users_used=users_used)
         model.train_pt(0)
@@ -2276,9 +1472,6 @@ if __name__ == '__main__':
 
         epsilon = 1 / args.n_parties - (0.5 / args.n_parties)
         Benefit_Matrix = Benefit_Matrix * (Benefit_Matrix > epsilon)
-
-        print('Benefit_Matrix')
-        print(Benefit_Matrix)
 
         logger.info('Benefit_Matrix')
         logger.info(Benefit_Matrix)
@@ -2294,67 +1487,35 @@ if __name__ == '__main__':
         for idx in range(len(relevance_vectors)):
             relevance_vectors[idx] = [x / sum(relevance_vectors[idx]) for x in relevance_vectors[idx]]
 
-        # save_heatmap(args, relevance_vectors)
-
         logger.info('relevance_vectors')
         logger.info(relevance_vectors)
-        print(relevance_vectors)
-
-        end_time = time.time()
-        elapsed_time = end_time - start_time
-        print(f"程序运行时间: {elapsed_time} 秒")
 
         for round in range(args.comm_round):
             logger.info("in comm round:" + str(round))
             print("in comm round:{}".format(round))
-
             arr = np.arange(args.n_parties)
             np.random.shuffle(arr)
-            selected = arr[:int(args.n_parties * args.sample)]
 
-            next_nets = local_train_FedCollab_net(nets, selected, args, train_dl_global, val_dl_global,
-                                                  relevance_vectors,
-                                                  test_dl=test_dl_global, device=device)
-
+            next_nets = local_train_net_and_aggregation_pmodel(nets, args, train_dl_global, relevance_vectors, device=device)
             nets = next_nets
-            # local_train_net(nets, selected, args, train_dl_global, val_dl_global, test_dl=test_dl_global, device=device)
-            # local_train_net(nets, args, net_dataidx_map, local_split=False, device=device)
             if (round + 1) % args.round_calculate == 0:
-                # train_acc_sum = 0
-                # val_acc_sum = 0
                 test_acc_sum = 0
                 ptest_acc_sum = 0
                 for idx in range(args.n_parties):
-                    correct, total = 0, 0
-                    # for net_id, net in nets_this_round.items():
-                    val_local_dl = val_dl_global[idx]
-                    train_local_dl = train_dl_global[idx]
-                    net = nets[idx]
-                    # train_acc = compute_accuracy(net, train_local_dl, device=device)
-                    # val_acc = compute_accuracy(net, val_local_dl, device=device)
-                    ptest_acc, test_acc = compute_local_test_accuracy(net, test_dl_global, data_distributions[idx],
-                                                                      device=device)
+                    ptest_acc, test_acc = compute_local_test_accuracy(nets[idx], test_dl_global, data_distributions[idx], device=device)
                     test_acc_sum = test_acc_sum + test_acc
                     ptest_acc_sum = ptest_acc_sum + ptest_acc
-                    # train_acc_sum = train_acc_sum + train_acc
-                    # val_acc_sum = val_acc_sum + val_acc
-                # end_train_acc = train_acc_sum / args.n_parties
-                # end_val_acc = val_acc_sum / args.n_parties
                 end_test_acc = test_acc_sum / args.n_parties
                 end_ptest_acc = ptest_acc_sum / args.n_parties
 
-                # logger.info('>> Global Model Train accuracy: %f' % end_train_acc)
-                # logger.info('>> Global Model Val accuracy: %f' % end_val_acc)
                 logger.info('>> Global Model ptest accuracy: %f' % end_ptest_acc)
                 logger.info('>> Global Model test accuracy: %f' % end_test_acc)
-                # print("round {},train acc = {:.5f}".format(round, end_train_acc))
-                # print("round {},val acc = {:.5f}".format(round, end_val_acc))
                 print("round {},ptest acc = {:.5f}".format(round, end_ptest_acc))
                 print("round {},test acc = {:.5f}".format(round, end_test_acc))
             print('-' * 80)
 
 
-    elif args.alg == 'pFedCollab':
+    elif args.alg == 'FedCollab':
         logger.info("Initializing nets")
         nets, local_model_meta_data, layer_type = init_nets(args.net_config, args.dropout_p, args.n_parties, args)
         global_models, global_model_meta_data, global_layer_type = init_nets(args.net_config, 0, 1, args)
@@ -2376,41 +1537,25 @@ if __name__ == '__main__':
             best_test_acc_list.append(0)
             # clients’ relevence vector
             relevance_vectors.append([0 for p in range(args.n_parties)])
-        start_time = time.time()
         ms = torch.Tensor([len(data.dataset) for data in train_dl_global])
         m = ms.sum()
         beta = ms / m
         disc_matrix = estimate_all(args, train_dl_global, global_models)
-
-        # save_heatmap(args, disc_matrix)
-        # disc_matrix = torch.randn(10, 10)
-        # 开始第三部分 collab_opt
         disc = torch.max(torch.Tensor([0]), disc_matrix)
-        # if True:
-        #     plt.imshow(disc)
-        #     plt.show()
-
         solver = discrete_solver
         low = np.inf
         best = None
         logs = []
-        # import time
-        # aa = time.time()
         for i in range(100):
             choice, error, log = solver(disc, m, beta, C=1)
             if error < low:
                 low = error
                 best = choice
-
             logs.append(log)
-
         choice = best
-
         collab = choice_to_collab_list(choice)
-
         print('Solved collaboration:', collab)
         logger.info('>>Solved collaboration:' + str(collab))
-
         print('Loss:', error * len(beta))
         logger.info("in comm round:" + str(round))
 
@@ -2420,7 +1565,6 @@ if __name__ == '__main__':
             print(coalition)
             logger.info('coalition %d ' + str(coalition))
 
-            # sub_datasets = {cid: dataset for (cid, dataset) in train_dl_global_dict.items() if cid in coalition}
 
             for idx in range(len(relevance_vectors)):
                 if idx in coalition:
@@ -2433,9 +1577,7 @@ if __name__ == '__main__':
         for idx in range(len(relevance_vectors)):
             relevance_vectors[idx] = [x / sum(relevance_vectors[idx]) for x in relevance_vectors[idx]]
 
-        end_time = time.time()
-        elapsed_time = end_time - start_time
-        print(f"程序运行时间: {elapsed_time} 秒")
+
 
         for round in range(args.comm_round):
             logger.info("in comm round:" + str(round))
@@ -2443,45 +1585,22 @@ if __name__ == '__main__':
 
             arr = np.arange(args.n_parties)
             np.random.shuffle(arr)
-            selected = arr[:int(args.n_parties * args.sample)]
 
-            next_nets = local_train_FedCollab_net(nets, selected, args, train_dl_global, val_dl_global,
-                                                  relevance_vectors,
-                                                  test_dl=test_dl_global, device=device)
+            next_nets = local_train_net_and_aggregation_pmodel(nets, args, train_dl_global, relevance_vectors, device=device)
 
             nets = next_nets
-            # local_train_net(nets, selected, args, train_dl_global, val_dl_global, test_dl=test_dl_global, device=device)
-            # local_train_net(nets, args, net_dataidx_map, local_split=False, device=device)
             if (round + 1) % args.round_calculate == 0:
-                # train_acc_sum = 0
-                # val_acc_sum = 0
                 test_acc_sum = 0
                 ptest_acc_sum = 0
                 for idx in range(args.n_parties):
-                    correct, total = 0, 0
-                    # for net_id, net in nets_this_round.items():
-                    val_local_dl = val_dl_global[idx]
-                    train_local_dl = train_dl_global[idx]
-                    net = nets[idx]
-                    # train_acc = compute_accuracy(net, train_local_dl, device=device)
-                    # val_acc = compute_accuracy(net, val_local_dl, device=device)
-                    ptest_acc, test_acc = compute_local_test_accuracy(net, test_dl_global, data_distributions[idx],
-                                                                      device=device)
+                    ptest_acc, test_acc = compute_local_test_accuracy(nets[idx], test_dl_global, data_distributions[idx], device=device)
                     test_acc_sum = test_acc_sum + test_acc
                     ptest_acc_sum = ptest_acc_sum + ptest_acc
-                    # train_acc_sum = train_acc_sum + train_acc
-                    # val_acc_sum = val_acc_sum + val_acc
-                # end_train_acc = train_acc_sum / args.n_parties
-                # end_val_acc = val_acc_sum / args.n_parties
                 end_test_acc = test_acc_sum / args.n_parties
                 end_ptest_acc = ptest_acc_sum / args.n_parties
 
-                # logger.info('>> Global Model Train accuracy: %f' % end_train_acc)
-                # logger.info('>> Global Model Val accuracy: %f' % end_val_acc)
                 logger.info('>> Global Model ptest accuracy: %f' % end_ptest_acc)
                 logger.info('>> Global Model test accuracy: %f' % end_test_acc)
-                # print("round {},train acc = {:.5f}".format(round, end_train_acc))
-                # print("round {},val acc = {:.5f}".format(round, end_val_acc))
                 print("round {},ptest acc = {:.5f}".format(round, end_ptest_acc))
                 print("round {},test acc = {:.5f}".format(round, end_test_acc))
             print('-' * 80)
@@ -2503,20 +1622,15 @@ if __name__ == '__main__':
         hashes = SRP_Gaussin_torch(raceK, raceR, IN, seed)
         sketch_buffer = []
         sketch_global_N = 0
-        start_time = time.time()
+
         for client in arr:
             device_s, device_n = sketch_input(raceK, raceR, IN, hashes, net_dataidx_map[client],
                                               train_dl_global[client])
-            memory_size_bytes = device_s.nbytes
-            memory_size_mb = memory_size_bytes / (1024 * 1024)
-            # print(f"Memory Size: {memory_size_mb:.6f} MB")
 
             sketch_buffer.append(np.expand_dims(device_s, axis=0))
             sketch_global_N += device_n
         global_sketch = np.concatenate(sketch_buffer, axis=0).sum(axis=0)
-        end_time = time.time()
-        elapsed_time = end_time - start_time
-        print(f"程序运行时间: {elapsed_time} 秒")
+
         local_models = []
         best_val_acc_list, best_test_acc_list = [], []
         relevance_vectors = []
@@ -2539,7 +1653,6 @@ if __name__ == '__main__':
                     relevance_vectors[i][j] = 0
             arr = np.arange(args.n_parties)
             np.random.shuffle(arr)
-            selected = arr[:int(args.n_parties * args.sample)]
             devices_random = np.random.choice(arr, int(3 * args.K), replace=False)
             # select device based on data distacne
             device_s = {}  # each device's sketch
@@ -2605,372 +1718,26 @@ if __name__ == '__main__':
             for idx in range(len(relevance_vectors)):
                 relevance_vectors[idx] = [x / sum(relevance_vectors[idx]) for x in relevance_vectors[idx]]
 
-            next_nets = local_train_FedCollab_net(nets, selected, args, train_dl_global, val_dl_global,
-                                                  relevance_vectors,
-                                                  test_dl=test_dl_global, device=device)
+            next_nets = local_train_net_and_aggregation_pmodel(nets,  args, train_dl_global, relevance_vectors, device=device)
 
             nets = next_nets
             for idx2 in devices_random:
                 nets[idx2] = nets[valid_id[0]]
 
             if (round + 1) % args.round_calculate == 0:
-                # train_acc_sum = 0
-                # val_acc_sum = 0
                 test_acc_sum = 0
                 ptest_acc_sum = 0
                 for idx in range(args.n_parties):
-                    correct, total = 0, 0
-                    # for net_id, net in nets_this_round.items():
-                    val_local_dl = val_dl_global[idx]
-                    train_local_dl = train_dl_global[idx]
-                    net = nets[idx]
-                    # train_acc = compute_accuracy(net, train_local_dl, device=device)
-                    # val_acc = compute_accuracy(net, val_local_dl, device=device)
-                    ptest_acc, test_acc = compute_local_test_accuracy(net, test_dl_global, data_distributions[idx],
-                                                                      device=device)
+                    ptest_acc, test_acc = compute_local_test_accuracy(nets[idx], test_dl_global, data_distributions[idx], device=device)
                     test_acc_sum = test_acc_sum + test_acc
                     ptest_acc_sum = ptest_acc_sum + ptest_acc
-                    # train_acc_sum = train_acc_sum + train_acc
-                    # val_acc_sum = val_acc_sum + val_acc
-                # end_train_acc = train_acc_sum / args.n_parties
-                # end_val_acc = val_acc_sum / args.n_parties
                 end_test_acc = test_acc_sum / args.n_parties
                 end_ptest_acc = ptest_acc_sum / args.n_parties
 
-                # logger.info('>> Global Model Train accuracy: %f' % end_train_acc)
-                # logger.info('>> Global Model Val accuracy: %f' % end_val_acc)
                 logger.info('>> Global Model ptest accuracy: %f' % end_ptest_acc)
                 logger.info('>> Global Model test accuracy: %f' % end_test_acc)
-                # print("round {},train acc = {:.5f}".format(round, end_train_acc))
-                # print("round {},val acc = {:.5f}".format(round, end_val_acc))
                 print("round {},ptest acc = {:.5f}".format(round, end_ptest_acc))
                 print("round {},test acc = {:.5f}".format(round, end_test_acc))
             print('-' * 80)
 
-            # train_acc_sum = 0
-            # val_acc_sum = 0
-            # test_acc_sum = 0
-            # for idx in valid_id:
-            #     correct, total = 0, 0
-            #     # for net_id, net in nets_this_round.items():
-            #     val_local_dl = val_dl_global[idx]
-            #     train_local_dl = train_dl_global[idx]
-            #     net = nets[idx]
-            #     train_acc = compute_accuracy(net, train_local_dl, device=device)
-            #     val_acc = compute_accuracy(net, val_local_dl, device=device)
-            #     test_acc, _ = compute_local_test_accuracy(net, test_dl_global, data_distributions[idx], device=device)
-            #     test_acc_sum = test_acc_sum + test_acc
-            #     train_acc_sum = train_acc_sum + train_acc
-            #     val_acc_sum = val_acc_sum + val_acc
-            # end_train_acc = train_acc_sum / len(valid_id)
-            # end_val_acc = val_acc_sum / len(valid_id)
-            # end_test_acc = test_acc_sum / len(valid_id)
-            #
-            # logger.info('devices_random K >> Global Model Train accuracy: %f' % end_train_acc)
-            # logger.info('devices_random K >> Global Model Val accuracy: %f' % end_val_acc)
-            # logger.info('devices_random K >> Global Model test accuracy: %f' % end_test_acc)
-            # print("devices_random K round {},train acc = {:.5f}".format(round, end_train_acc))
-            # print("devices_random K round {},val acc = {:.5f}".format(round, end_val_acc))
-            # print("devices_random K round {},test acc = {:.5f}".format(round, end_test_acc))
 
-
-    elif args.alg == 'fedprox':
-        logger.info("Initializing nets")
-        nets, local_model_meta_data, layer_type = init_nets(args.net_config, args.dropout_p, args.n_parties, args)
-        global_models, global_model_meta_data, global_layer_type = init_nets(args.net_config, 0, 1, args)
-        global_model = global_models[0]
-
-        global_para = global_model.state_dict()
-
-        if args.is_same_initial:
-            for net_id, net in nets.items():
-                net.load_state_dict(global_para)
-
-        for round in range(args.comm_round):
-            logger.info("in comm round:" + str(round))
-
-            arr = np.arange(args.n_parties)
-            np.random.shuffle(arr)
-            selected = arr[:int(args.n_parties * args.sample)]
-
-            global_para = global_model.state_dict()
-            if round == 0:
-                if args.is_same_initial:
-                    for idx in selected:
-                        nets[idx].load_state_dict(global_para)
-            else:
-                for idx in selected:
-                    nets[idx].load_state_dict(global_para)
-
-            local_train_net_fedprox(nets, selected, global_model, args, net_dataidx_map, test_dl=test_dl_global,
-                                    device=device)
-            global_model.to('cpu')
-
-            # update global model
-            total_data_points = sum([len(net_dataidx_map[r]) for r in selected])
-            fed_avg_freqs = [len(net_dataidx_map[r]) / total_data_points for r in selected]
-
-            for idx in range(len(selected)):
-                net_para = nets[selected[idx]].cpu().state_dict()
-                if idx == 0:
-                    for key in net_para:
-                        global_para[key] = net_para[key] * fed_avg_freqs[idx]
-                else:
-                    for key in net_para:
-                        global_para[key] += net_para[key] * fed_avg_freqs[idx]
-            global_model.load_state_dict(global_para)
-
-            logger.info('global n_training: %d' % len(train_dl_global))
-            logger.info('global n_test: %d' % len(test_dl_global))
-
-            global_model.to(device)
-            train_acc = compute_accuracy(global_model, train_dl_global, device=device)
-            test_acc, conf_matrix = compute_accuracy(global_model, test_dl_global, get_confusion_matrix=True,
-                                                     device=device)
-
-            logger.info('>> Global Model Train accuracy: %f' % train_acc)
-            logger.info('>> Global Model Test accuracy: %f' % test_acc)
-
-    elif args.alg == 'scaffold':
-        logger.info("Initializing nets")
-        nets, local_model_meta_data, layer_type = init_nets(args.net_config, args.dropout_p, args.n_parties, args)
-        global_models, global_model_meta_data, global_layer_type = init_nets(args.net_config, 0, 1, args)
-        global_model = global_models[0]
-
-        c_nets, _, _ = init_nets(args.net_config, args.dropout_p, args.n_parties, args)
-        c_globals, _, _ = init_nets(args.net_config, 0, 1, args)
-        c_global = c_globals[0]
-        c_global_para = c_global.state_dict()
-        for net_id, net in c_nets.items():
-            net.load_state_dict(c_global_para)
-
-        global_para = global_model.state_dict()
-        if args.is_same_initial:
-            for net_id, net in nets.items():
-                net.load_state_dict(global_para)
-
-        for round in range(args.comm_round):
-            logger.info("in comm round:" + str(round))
-
-            arr = np.arange(args.n_parties)
-            np.random.shuffle(arr)
-            selected = arr[:int(args.n_parties * args.sample)]
-
-            global_para = global_model.state_dict()
-            if round == 0:
-                if args.is_same_initial:
-                    for idx in selected:
-                        nets[idx].load_state_dict(global_para)
-            else:
-                for idx in selected:
-                    nets[idx].load_state_dict(global_para)
-
-            local_train_net_scaffold(nets, selected, global_model, c_nets, c_global, args, net_dataidx_map,
-                                     test_dl=test_dl_global, device=device)
-            # local_train_net(nets, args, net_dataidx_map, local_split=False, device=device)
-
-            # update global model
-            total_data_points = sum([len(net_dataidx_map[r]) for r in selected])
-            fed_avg_freqs = [len(net_dataidx_map[r]) / total_data_points for r in selected]
-
-            for idx in range(len(selected)):
-                net_para = nets[selected[idx]].cpu().state_dict()
-                if idx == 0:
-                    for key in net_para:
-                        global_para[key] = net_para[key] * fed_avg_freqs[idx]
-                else:
-                    for key in net_para:
-                        global_para[key] += net_para[key] * fed_avg_freqs[idx]
-            global_model.load_state_dict(global_para)
-
-            logger.info('global n_training: %d' % len(train_dl_global))
-            logger.info('global n_test: %d' % len(test_dl_global))
-
-            global_model.to(device)
-            train_acc = compute_accuracy(global_model, train_dl_global, device=device)
-            test_acc, conf_matrix = compute_accuracy(global_model, test_dl_global, get_confusion_matrix=True,
-                                                     device=device)
-
-            logger.info('>> Global Model Train accuracy: %f' % train_acc)
-            logger.info('>> Global Model Test accuracy: %f' % test_acc)
-
-    elif args.alg == 'fednova':
-        logger.info("Initializing nets")
-        nets, local_model_meta_data, layer_type = init_nets(args.net_config, args.dropout_p, args.n_parties, args)
-        global_models, global_model_meta_data, global_layer_type = init_nets(args.net_config, 0, 1, args)
-        global_model = global_models[0]
-
-        d_list = [copy.deepcopy(global_model.state_dict()) for i in range(args.n_parties)]
-        d_total_round = copy.deepcopy(global_model.state_dict())
-        for i in range(args.n_parties):
-            for key in d_list[i]:
-                d_list[i][key] = 0
-        for key in d_total_round:
-            d_total_round[key] = 0
-
-        data_sum = 0
-        for i in range(args.n_parties):
-            data_sum += len(traindata_cls_counts[i])
-        portion = []
-        for i in range(args.n_parties):
-            portion.append(len(traindata_cls_counts[i]) / data_sum)
-
-        global_para = global_model.state_dict()
-        if args.is_same_initial:
-            for net_id, net in nets.items():
-                net.load_state_dict(global_para)
-
-        for round in range(args.comm_round):
-            logger.info("in comm round:" + str(round))
-
-            arr = np.arange(args.n_parties)
-            np.random.shuffle(arr)
-            selected = arr[:int(args.n_parties * args.sample)]
-
-            global_para = global_model.state_dict()
-            if round == 0:
-                if args.is_same_initial:
-                    for idx in selected:
-                        nets[idx].load_state_dict(global_para)
-            else:
-                for idx in selected:
-                    nets[idx].load_state_dict(global_para)
-
-            _, a_list, d_list, n_list = local_train_net_fednova(nets, selected, global_model, args, net_dataidx_map,
-                                                                test_dl=test_dl_global, device=device)
-            total_n = sum(n_list)
-            # print("total_n:", total_n)
-            d_total_round = copy.deepcopy(global_model.state_dict())
-            for key in d_total_round:
-                d_total_round[key] = 0.0
-
-            for i in range(len(selected)):
-                d_para = d_list[i]
-                for key in d_para:
-                    # if d_total_round[key].type == 'torch.LongTensor':
-                    #    d_total_round[key] += (d_para[key] * n_list[i] / total_n).type(torch.LongTensor)
-                    # else:
-                    d_total_round[key] += d_para[key] * n_list[i] / total_n
-
-            # for i in range(len(selected)):
-            #     d_total_round = d_total_round + d_list[i] * n_list[i] / total_n
-
-            # local_train_net(nets, args, net_dataidx_map, local_split=False, device=device)
-
-            # update global model
-            coeff = 0.0
-            for i in range(len(selected)):
-                coeff = coeff + a_list[i] * n_list[i] / total_n
-
-            updated_model = global_model.state_dict()
-            for key in updated_model:
-                # print(updated_model[key])
-                if updated_model[key].type() == 'torch.LongTensor':
-                    updated_model[key] -= (coeff * d_total_round[key]).type(torch.LongTensor)
-                elif updated_model[key].type() == 'torch.cuda.LongTensor':
-                    updated_model[key] -= (coeff * d_total_round[key]).type(torch.cuda.LongTensor)
-                else:
-                    # print(updated_model[key].type())
-                    # print((coeff*d_total_round[key].type()))
-                    updated_model[key] -= coeff * d_total_round[key]
-            global_model.load_state_dict(updated_model)
-
-            logger.info('global n_training: %d' % len(train_dl_global))
-            logger.info('global n_test: %d' % len(test_dl_global))
-
-            global_model.to(device)
-            train_acc = compute_accuracy(global_model, train_dl_global, device=device)
-            test_acc, conf_matrix = compute_accuracy(global_model, test_dl_global, get_confusion_matrix=True,
-                                                     device=device)
-
-            logger.info('>> Global Model Train accuracy: %f' % train_acc)
-            logger.info('>> Global Model Test accuracy: %f' % test_acc)
-
-    elif args.alg == 'moon':
-        logger.info("Initializing nets")
-        nets, local_model_meta_data, layer_type = init_nets(args.net_config, args.dropout_p, args.n_parties, args)
-        global_models, global_model_meta_data, global_layer_type = init_nets(args.net_config, 0, 1, args)
-        global_model = global_models[0]
-
-        global_para = global_model.state_dict()
-        if args.is_same_initial:
-            for net_id, net in nets.items():
-                net.load_state_dict(global_para)
-
-        old_nets_pool = []
-        old_nets = copy.deepcopy(nets)
-        for _, net in old_nets.items():
-            net.eval()
-            for param in net.parameters():
-                param.requires_grad = False
-
-        for round in range(args.comm_round):
-            logger.info("in comm round:" + str(round))
-
-            arr = np.arange(args.n_parties)
-            np.random.shuffle(arr)
-            selected = arr[:int(args.n_parties * args.sample)]
-
-            global_para = global_model.state_dict()
-            if round == 0:
-                if args.is_same_initial:
-                    for idx in selected:
-                        nets[idx].load_state_dict(global_para)
-            else:
-                for idx in selected:
-                    nets[idx].load_state_dict(global_para)
-
-            local_train_net_moon(nets, selected, args, net_dataidx_map, test_dl=test_dl_global,
-                                 global_model=global_model,
-                                 prev_model_pool=old_nets_pool, round=round, device=device)
-            # local_train_net(nets, args, net_dataidx_map, local_split=False, device=device)
-
-            # update global model
-            total_data_points = sum([len(net_dataidx_map[r]) for r in selected])
-            fed_avg_freqs = [len(net_dataidx_map[r]) / total_data_points for r in selected]
-
-            for idx in range(len(selected)):
-                net_para = nets[selected[idx]].cpu().state_dict()
-                if idx == 0:
-                    for key in net_para:
-                        global_para[key] = net_para[key] * fed_avg_freqs[idx]
-                else:
-                    for key in net_para:
-                        global_para[key] += net_para[key] * fed_avg_freqs[idx]
-            global_model.load_state_dict(global_para)
-
-            logger.info('global n_training: %d' % len(train_dl_global))
-            logger.info('global n_test: %d' % len(test_dl_global))
-
-            global_model.to(device)
-            train_acc = compute_accuracy(global_model, train_dl_global, moon_model=True, device=device)
-            test_acc, conf_matrix = compute_accuracy(global_model, test_dl_global, get_confusion_matrix=True,
-                                                     moon_model=True, device=device)
-
-            logger.info('>> Global Model Train accuracy: %f' % train_acc)
-            logger.info('>> Global Model Test accuracy: %f' % test_acc)
-
-            old_nets = copy.deepcopy(nets)
-            for _, net in old_nets.items():
-                net.eval()
-                for param in net.parameters():
-                    param.requires_grad = False
-            if len(old_nets_pool) < 1:
-                old_nets_pool.append(old_nets)
-            else:
-                old_nets_pool[0] = old_nets
-
-    elif args.alg == 'local_training':
-        logger.info("Initializing nets")
-        nets, local_model_meta_data, layer_type = init_nets(args.net_config, args.dropout_p, args.n_parties, args)
-        arr = np.arange(args.n_parties)
-        local_train_net(nets, arr, args, net_dataidx_map, test_dl=test_dl_global, device=device)
-
-    elif args.alg == 'all_in':
-        nets, local_model_meta_data, layer_type = init_nets(args.net_config, args.dropout_p, 1, args)
-        n_epoch = args.epochs
-        nets[0].to(device)
-        ptestacc, testacc = train_net(0, nets[0], train_dl_global, test_dl_global, n_epoch, args.lr, args.optimizer,
-                                      device=device)
-
-        logger.info("All in test acc: %f" % testacc)
