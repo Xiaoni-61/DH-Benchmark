@@ -61,7 +61,7 @@ python experiments.py --model=simple-cnn \
 |-----------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `model`         | The model architecture. Options: `simple-cnn`, `vgg`, `resnet`, `mlp`. Default = `mlp`.                                                                                                       |
 | `dataset`       | Dataset to use. Options: `mnist`, `cifar10`, `fmnist`, `svhn`, `femnist`, `a9a`, `rcv1`, `covtype`. Default = `mnist`.                                                                        |
-| `alg`           | The training algorithm. Options: `fedavg`, `fedprox`, `scaffold`, `fednova`, `moon`. Default = `fedavg`.                                                                                      |
+| `alg`           | The training algorithm. Options: `pFedSV`, `pFedJS`, `pFedgraph`, `FedCollab`, `RACE`, `CE`. Default = `pFedSV`.                                                                              |
 | `lr`            | Learning rate for the local models, default = `0.01`.                                                                                                                                         |
 | `batch-size`    | Batch size, default = `64`.                                                                                                                                                                   |
 | `epochs`        | Number of local training epochs, default = `5`.                                                                                                                                               |
