@@ -2,7 +2,7 @@
 
 
 
-This is the code of **paper Benchmarking Data Heterogeneity Evaluation Approaches for Personalized Federated Learning**
+This is the code of **paper Benchmarking Data Heterogeneity Evaluation Approaches for Personalized Federated Learning** [DH-Benchmark](https://arxiv.org/abs/2410.07286) 
 
 This code runs a benchmark for personalized federated learning algorithms to assess Data Heterogeneity Evaluation
 Approaches. Specifically, We compared six algorithms (pFedSV/pFedJS/pFedgraph/FedCollab/RACE/CE), 3 types of non-IID settings (label
