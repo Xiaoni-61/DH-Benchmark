@@ -201,6 +201,8 @@ def init_nets(net_configs, dropout_p, n_parties, args):
                 elif args.model == "simple-cnn":
                     if args.dataset in ("cifar10", "cinic10", "svhn"):
                         net = SimpleCNN(input_dim=(16 * 5 * 5), hidden_dims=[120, 84], output_dim=10)
+                    elif args.dataset in ("cifar100"):
+                        net = SimpleCNN(input_dim=(16 * 5 * 5), hidden_dims=[120, 84], output_dim=100)
                     elif args.dataset in ("mnist", 'femnist', 'fmnist'):
                         net = SimpleCNNMNIST(input_dim=(16 * 4 * 4), hidden_dims=[120, 84], output_dim=10)
                     elif args.dataset == 'celeba':
@@ -208,7 +210,7 @@ def init_nets(net_configs, dropout_p, n_parties, args):
                 elif args.model == "vgg-9":
                     if args.dataset in ("mnist", 'femnist'):
                         net = ModerateCNNMNIST()
-                    elif args.dataset in ("cifar10", "cinic10", "svhn"):
+                    elif args.dataset in ("cifar10", "cinic10", "svhn", "cifar100"):
                         # print("in moderate cnn")
                         net = ModerateCNN()
                     elif args.dataset == 'celeba':
@@ -1118,7 +1120,7 @@ if __name__ == '__main__':
     logger.info("Partitioning data")
     X_train, y_train, X_test, y_test, net_dataidx_map, traindata_cls_counts = partition_data(
         args.dataset, args.datadir, args.logdir, args.partition, args.n_parties, beta=args.beta)
-
+    num_label = np.unique(y_train).size
     data_distributions = np.zeros((args.n_parties, len(np.unique(y_train))))
     for row in traindata_cls_counts:
         for col in traindata_cls_counts[row]:
@@ -1334,11 +1336,11 @@ if __name__ == '__main__':
                     count1 = Counter(dataset1.dataset.labels.tolist())
                     count2 = Counter(dataset2.dataset.labels.tolist())
                     label_ratio1 = torch.tensor(
-                        [(count1[idx] + 1) / (dataset1.dataset.labels.shape[0] + args.n_parties) for idx in
-                         range(args.n_parties)])  # smoothness
+                        [(count1[idx] + 1) / (dataset1.dataset.labels.shape[0] + num_label) for idx in
+                         range(num_label)])  # smoothness
                     label_ratio2 = torch.tensor(
-                        [(count2[idx] + 1) / (dataset2.dataset.labels.shape[0] + args.n_parties) for idx in
-                         range(args.n_parties)])
+                        [(count2[idx] + 1) / (dataset2.dataset.labels.shape[0] + num_label) for idx in
+                         range(num_label)])
                     JS_divergence = 0.5 * kl_div(label_ratio1.log(), (label_ratio1 + label_ratio2) / 2,
                                                  reduction='sum') + 0.5 * kl_div(label_ratio2.log(),
                                                                                  (label_ratio1 + label_ratio2) / 2,

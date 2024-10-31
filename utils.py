@@ -357,7 +357,7 @@ def partition_data(dataset, datadir, logdir, partition, n_parties, beta=0.4):
             K = 100
         elif dataset == "tinyimagenet":
             K = 200
-        if num == 10:
+        if num == 9:
             net_dataidx_map = {i: np.ndarray(0, dtype=np.int64) for i in range(n_parties)}
             for i in range(10):
                 idx_k = np.where(y_train == i)[0]
@@ -383,12 +383,15 @@ def partition_data(dataset, datadir, logdir, partition, n_parties, beta=0.4):
             for i in range(K):
                 idx_k = np.where(y_train == i)[0]
                 np.random.shuffle(idx_k)
-                split = np.array_split(idx_k, times[i])
-                ids = 0
-                for j in range(n_parties):
-                    if i in contain[j]:
-                        net_dataidx_map[j] = np.append(net_dataidx_map[j], split[ids])
-                        ids += 1
+                try:
+                    split = np.array_split(idx_k, times[i])
+                    ids = 0
+                    for j in range(n_parties):
+                        if i in contain[j]:
+                            net_dataidx_map[j] = np.append(net_dataidx_map[j], split[ids])
+                            ids += 1
+                except Exception as e:
+                    pass
 
     elif partition == "iid-diff-quantity":
         idxs = np.random.permutation(n_train)
